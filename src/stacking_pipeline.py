@@ -45,6 +45,11 @@ def run_pipeline(master_flat, master_dark, lights_dir, partial_dir, final_dir):
 
     # Initialize pySiril application interface
     app = Siril()
+
+    # Mute the background log stream if VERBOSE is False
+    if not c.VERBOSE:
+        app.tr.MuteSiril(True)
+
     try:
         # Open connection to the Siril backend
         app.Open()
@@ -107,16 +112,35 @@ def run_pipeline(master_flat, master_dark, lights_dir, partial_dir, final_dir):
 
             # 1b. Calibrate
             print("Calibrating frames...")
+            # CRITICAL: If using Drizzle, the sequence must NOT be debayered here.
+            # Drizzle requires the raw CFA data and handles debayering on the fly.
+            debayer_flag = "" if c.USE_DRIZZLE else "-debayer"
             cal_cmd = (
                 f'calibrate lights "-dark={master_dark_path}" "-flat={master_flat_path}" '
-                f"-cfa -equalize_cfa -cc=dark {c.COLD_SIGMA} {c.HOT_SIGMA} -debayer"
+                f"-cfa -equalize_cfa -cc=dark {c.COLD_SIGMA} {c.HOT_SIGMA} {debayer_flag}"
             )
             app.Execute(cal_cmd)
 
             # 1c. Register
             print("Registering frames...")
             app.Execute("register pp_lights -2pass")
-            app.Execute("seqapplyreg pp_lights -framing=max")
+
+            # Move the filter HERE. This prevents bad frames from ever being exported.
+            filter_str = f"-filter-fwhm={c.MAX_FWHM}"
+
+            if c.USE_DRIZZLE:
+                print(
+                    f"Applying Drizzle Filtered (Scale: {c.DRIZZLE_SCALE}, Pixfrac: {c.PIXFRAC})..."
+                )
+                # We add the filter_str here
+                drizzle_cmd = (
+                    f"seqapplyreg pp_lights -framing=max {filter_str} "
+                    f"-drizzle -scale={c.DRIZZLE_SCALE} -pixfrac={c.PIXFRAC} -kernel={c.DRIZZLE_KERNEL}"
+                )
+                app.Execute(drizzle_cmd)
+            else:
+                print(f"Applying Filtered Registration (FWHM {c.MAX_FWHM})...")
+                app.Execute(f"seqapplyreg pp_lights -framing=max {filter_str}")
 
             # 1d. Stack Partial Batch
             print("Stacking batch...")
@@ -126,8 +150,8 @@ def run_pipeline(master_flat, master_dark, lights_dir, partial_dir, final_dir):
             # Fixed the stack command syntax based on documentation
             stack_cmd = (
                 f"stack r_pp_lights rej winsorized {c.SIGMA_LOW} {c.SIGMA_HIGH} "
-                f"-norm=addscale -filter-fwhm={c.MAX_FWHM} "
-                f'-weight=wfwhm "-out={partial_stack_file.as_posix()}" '
+                f"-norm=addscale -weight=wfwhm "
+                f'"-out={partial_stack_file.as_posix()}" '
                 f"-output_norm -rgb_equal -32b"
             )
             app.Execute(stack_cmd)
