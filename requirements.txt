@@ -1,0 +1,6 @@
+# Astrophotography processing wrapper
+./libs/pysiril-0.0.15-py3-none-any.whl
+pywin32
+
+# Interactive python environment for running main.ipynb
+jupyter
